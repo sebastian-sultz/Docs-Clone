@@ -1,0 +1,27 @@
+/* src/styles/quill-overrides.css */
+.quill-editor {
+  height: 100%;
+}
+
+.ql-editor {
+  font-size: 16px;
+  line-height: 1.6;
+  padding: 20px;
+  min-height: 100%;
+}
+
+.ql-container {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+  border: none !important;
+}
+
+.ql-toolbar {
+  border: none !important;
+  border-bottom: 1px solid #e2e8f0 !important;
+  padding: 12px 20px !important;
+}
+
+.ql-editor.ql-blank::before {
+  font-style: normal;
+  color: #a0aec0;
+}
