@@ -9,6 +9,7 @@ import Dashboard from './pages/Dashboard';
 import Document from './pages/Document';
 import DocumentSettings from './pages/DocumentSettings';
 import './index.css';
+import Navigation from './components/Navigation';
 
 function App() {
   return (
@@ -21,6 +22,7 @@ function App() {
               <Route path="/register" element={<Register />} />
               <Route path="/" element={
                 <ProtectedRoute>
+                   <Navigation />
                   <Dashboard />
                 </ProtectedRoute>
               } />

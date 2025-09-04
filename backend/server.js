@@ -62,9 +62,25 @@ io.on('connection', (socket) => {
     socket.to(documentId).emit('user-joined', { userId, username });
   });
   
-  socket.on('text-change', (data) => {
-    socket.to(data.documentId).emit('text-change', data);
-  });
+// Modify the text-change event handler
+socket.on('text-change', (data) => {
+  // Store the operation with timestamp for conflict resolution
+  const operation = {
+    ...data,
+    timestamp: Date.now(),
+    socketId: socket.id
+  };
+  
+  // Broadcast to other users in the same document
+  socket.to(data.documentId).emit('text-change', operation);
+  
+  // Basic conflict resolution - store the latest change
+  if (activeDocuments.has(data.documentId)) {
+    const docData = activeDocuments.get(data.documentId);
+    docData.lastOperation = operation;
+    activeDocuments.set(data.documentId, docData);
+  }
+});
   
   socket.on('chat-message', (data) => {
     io.to(data.documentId).emit('chat-message', data);
@@ -92,6 +108,14 @@ io.on('connection', (socket) => {
     console.log('User disconnected:', socket.id);
   });
 });
+
+
+
+
+
+
+
+
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));

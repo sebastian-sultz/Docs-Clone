@@ -9,6 +9,7 @@ const Dashboard = () => {
   const [newDocTitle, setNewDocTitle] = useState('');
   const [showUserManagement, setShowUserManagement] = useState(false);
   const [users, setUsers] = useState([]);
+  const [filter, setFilter] = useState('all'); // ✅ filter state
   const { currentUser, logout } = useAuth();
   const navigate = useNavigate();
 
@@ -61,8 +62,38 @@ const Dashboard = () => {
     }
   };
 
+  // ✅ Combined role-based + filter-based document filtering
+  const getFilteredDocuments = () => {
+    if (!currentUser) return documents;
+
+    return documents.filter(doc => {
+      // Admin sees everything regardless of filter
+      if (currentUser.role === 'admin') {
+        if (filter === 'owned') return doc.owner._id === currentUser.id;
+        if (filter === 'shared') return doc.collaborators.some(c => c.user._id === currentUser.id);
+        if (filter === 'public') return doc.isPublic;
+        return true; // all
+      }
+
+      // Normal users: can only see allowed docs
+      const canAccess =
+        doc.owner._id === currentUser.id ||
+        doc.collaborators.some(c => c.user._id === currentUser.id) ||
+        doc.isPublic;
+
+      if (!canAccess) return false;
+
+      // Apply filter on top of access rights
+      if (filter === 'owned') return doc.owner._id === currentUser.id;
+      if (filter === 'shared') return doc.collaborators.some(c => c.user._id === currentUser.id);
+      if (filter === 'public') return doc.isPublic;
+      return true; // all
+    });
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* Header */}
       <header className="bg-white shadow">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
           <h1 className="text-2xl font-bold text-gray-900">Collaboration Tool</h1>
@@ -86,7 +117,9 @@ const Dashboard = () => {
         </div>
       </header>
 
+      {/* Main */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* User Management for Admin */}
         {showUserManagement && currentUser?.role === 'admin' && (
           <div className="mb-8 bg-white p-6 rounded-lg shadow-md">
             <h2 className="text-xl font-semibold mb-4">User Management</h2>
@@ -125,18 +158,32 @@ const Dashboard = () => {
           </div>
         )}
 
+        {/* Documents Section with Filter */}
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-xl font-semibold">My Documents</h2>
-          <button
-            onClick={() => setShowModal(true)}
-            className="bg-indigo-600 text-white px-4 py-2 rounded-md"
-          >
-            New Document
-          </button>
+          <div className="flex space-x-2">
+            <select
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              className="border rounded-md p-2"
+            >
+              <option value="all">All Documents</option>
+              <option value="owned">My Documents</option>
+              <option value="shared">Shared With Me</option>
+              <option value="public">Public Documents</option>
+            </select>
+            <button
+              onClick={() => setShowModal(true)}
+              className="bg-indigo-600 text-white px-4 py-2 rounded-md"
+            >
+              New Document
+            </button>
+          </div>
         </div>
 
+        {/* ✅ Filtered documents */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {documents.map(doc => (
+          {getFilteredDocuments().map(doc => (
             <div key={doc._id} className="bg-white rounded-lg shadow-md p-6">
               <h3 className="text-lg font-semibold mb-2">{doc.title}</h3>
               <p className="text-gray-600 mb-4">
@@ -149,7 +196,7 @@ const Dashboard = () => {
                 >
                   Open Document
                 </Link>
-                {doc.owner._id === currentUser?._id && (
+                {doc.owner._id === currentUser?.id && (
                   <Link
                     to={`/document/${doc._id}/settings`}
                     className="text-gray-600 hover:text-gray-800"
@@ -163,6 +210,7 @@ const Dashboard = () => {
         </div>
       </main>
 
+      {/* Create New Document Modal */}
       {showModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
           <div className="bg-white p-6 rounded-lg w-96">
