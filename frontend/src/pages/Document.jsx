@@ -1,13 +1,15 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import TextEditor from '../components/TextEditor';
 import Chat from '../components/Chat';
 import axios from 'axios';
+import jsPDF from 'jspdf';
+import { saveAs } from 'file-saver';
 
 const Document = () => {
-  const [document, setDocument] = useState(null);
+  const [documentData, setDocumentData] = useState(null);
   const [content, setContent] = useState('');
   const [title, setTitle] = useState('');
   const [loading, setLoading] = useState(true);
@@ -15,64 +17,85 @@ const Document = () => {
   const [activeUsers, setActiveUsers] = useState([]);
   const [showChat, setShowChat] = useState(false);
   const [canEdit, setCanEdit] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
   const [lastSavedContent, setLastSavedContent] = useState('');
-  // Add cursor position state
-  const [cursorPositions, setCursorPositions] = useState({});
-
+  const [error, setError] = useState(null);
+  
   const { id } = useParams();
   const navigate = useNavigate();
   const { currentUser } = useAuth();
   const socket = useSocket();
   const saveTimeout = useRef(null);
+  const exportMenuRef = useRef(null);
+
+  // Handle click outside for export menu
+  const handleClickOutside = useCallback((event) => {
+    if (exportMenuRef.current && !exportMenuRef.current.contains(event.target)) {
+      setShowExportMenu(false);
+    }
+  }, []);
 
   useEffect(() => {
     fetchDocument();
   }, [id]);
 
   useEffect(() => {
-    if (socket && document && currentUser) {
+    if (socket && documentData && currentUser) {
       socket.emit('join-document', {
         documentId: id,
         userId: currentUser.id,
-        username: currentUser.username,
+        username: currentUser.username
       });
-
+      
       socket.on('text-change', (data) => {
         if (data.userId !== currentUser.id) {
           setContent(data.content);
         }
       });
-
+      
       socket.on('users-update', (users) => {
         setActiveUsers(users);
       });
-
-      // Add cursor position listener
-      socket.on('cursor-position', (data) => {
-        setCursorPositions((prev) => ({
-          ...prev,
-          [data.userId]: { position: data.position, username: data.username },
-        }));
+      
+      socket.on('document-state', (data) => {
+        setContent(data.content);
       });
-
+      
       return () => {
         socket.off('text-change');
         socket.off('users-update');
-        socket.off('cursor-position');
+        socket.off('document-state');
       };
     }
-  }, [socket, document, currentUser]);
+  }, [socket, documentData, currentUser, id]);
+
+  // Setup click outside listener only after component is mounted
+  useEffect(() => {
+    // Add event listener only in browser environment
+    if (typeof window !== 'undefined') {
+      document.addEventListener('mousedown', handleClickOutside);
+      
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside);
+      };
+    }
+  }, [handleClickOutside]);
 
   const fetchDocument = async () => {
     try {
       const response = await axios.get(`/api/documents/${id}`);
-      setDocument(response.data);
+      setDocumentData(response.data);
       setContent(response.data.content);
       setTitle(response.data.title);
       setCanEdit(response.data.canEdit);
+      setLastSavedContent(response.data.content);
+      setError(null);
     } catch (error) {
       console.error('Error fetching document:', error);
-      navigate('/');
+      setError('Failed to load document');
+      if (error.response?.status === 404) {
+        setTimeout(() => navigate('/'), 2000);
+      }
     } finally {
       setLoading(false);
     }
@@ -80,21 +103,18 @@ const Document = () => {
 
   const handleContentChange = (newContent) => {
     setContent(newContent);
-
-    // Only emit changes if content is different and user can edit
+    
     if (socket && canEdit && newContent !== content) {
       socket.emit('text-change', {
         documentId: id,
         content: newContent,
-        userId: currentUser.id,
+        userId: currentUser.id
       });
     }
-
+    
     // Auto-save only if content has changed significantly
-    if (
-      newContent !== lastSavedContent &&
-      (newContent.length < 50 || Math.abs(newContent.length - lastSavedContent.length) > 5)
-    ) {
+    if (newContent !== lastSavedContent && 
+        (newContent.length < 50 || Math.abs(newContent.length - lastSavedContent.length) > 5)) {
       if (saveTimeout.current) {
         clearTimeout(saveTimeout.current);
       }
@@ -125,44 +145,45 @@ const Document = () => {
     saveTimeout.current = setTimeout(saveDocument, 2000);
   };
 
-  const exportDocument = async (format) => {
-    try {
-      if (format === 'pdf') {
-        // Create PDF using jsPDF
-        const doc = new jsPDF();
-        doc.text(title, 10, 10);
-        doc.text(content, 10, 20);
-        doc.save(`${title}.pdf`);
-      } else if (format === 'word') {
-        // Create Word document
-        const blob = new Blob(
-          [
-            `
-        <html xmlns:o="urn:schemas-microsoft-com:office:office" 
-              xmlns:w="urn:schemas-microsoft-com:office:word" 
-              xmlns="http://www.w3.org/TR/REC-html40">
-          <head>
-            <meta charset="utf-8">
-            <title>${title}</title>
-          </head>
-          <body>
-            <h1>${title}</h1>
-            <div>${content}</div>
-          </body>
-        </html>
-      `,
-          ],
-          { type: 'application/msword' }
-        );
-
-        saveAs(blob, `${title}.doc`);
-      }
-    } catch (error) {
-      console.error('Error exporting document:', error);
-    }
+  const exportToPDF = () => {
+    const doc = new jsPDF();
+    doc.setFontSize(16);
+    doc.text(title, 10, 10);
+    
+    doc.setFontSize(12);
+    // Split content into lines
+    const lines = doc.splitTextToSize(content, 180);
+    doc.text(lines, 10, 20);
+    
+    doc.save(`${title}.pdf`);
+    setShowExportMenu(false);
   };
 
-  if (loading) return <div>Loading...</div>;
+  const exportToWord = () => {
+    // Create a simple HTML document for Word export
+    const html = `
+      <html xmlns:o="urn:schemas-microsoft-com:office:office" 
+            xmlns:w="urn:schemas-microsoft-com:office:word" 
+            xmlns="http://www.w3.org/TR/REC-html40">
+        <head>
+          <meta charset="utf-8">
+          <title>${title}</title>
+        </head>
+        <body>
+          <h1>${title}</h1>
+          <div>${content}</div>
+        </body>
+      </html>
+    `;
+    
+    // Create a Blob and download
+    const blob = new Blob([html], { type: 'application/msword' });
+    saveAs(blob, `${title}.doc`);
+    setShowExportMenu(false);
+  };
+
+  if (loading) return <div className="flex items-center justify-center h-screen">Loading...</div>;
+  if (error) return <div className="flex items-center justify-center h-screen">{error}</div>;
 
   return (
     <div className="h-screen flex flex-col">
@@ -199,65 +220,43 @@ const Document = () => {
               onClick={() => setShowChat(!showChat)}
               className="bg-green-600 text-white px-3 py-1 rounded-md"
             >
-              Chat
+              {showChat ? 'Hide Chat' : 'Show Chat'}
             </button>
-            <div className="relative">
-              <button className="bg-blue-600 text-white px-3 py-1 rounded-md">
+            <div className="relative" ref={exportMenuRef}>
+              <button 
+                onClick={() => setShowExportMenu(!showExportMenu)}
+                className="bg-blue-600 text-white px-3 py-1 rounded-md"
+              >
                 Export
               </button>
-              <div className="absolute right-0 mt-1 w-32 bg-white rounded-md shadow-lg py-1 hidden group-hover:block">
-                <button
-                  onClick={() => exportDocument('pdf')}
-                  className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                >
-                  PDF
-                </button>
-                <button
-                  onClick={() => exportDocument('word')}
-                  className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                >
-                  Word
-                </button>
-              </div>
+              {showExportMenu && (
+                <div className="absolute right-0 mt-1 w-32 bg-white rounded-md shadow-lg py-1 z-10">
+                  <button
+                    onClick={exportToPDF}
+                    className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                  >
+                    PDF
+                  </button>
+                  <button
+                    onClick={exportToWord}
+                    className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                  >
+                    Word
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
       </header>
-
+      
       <div className="flex-1 flex overflow-hidden">
         <div className={`flex-1 overflow-auto p-4 ${showChat ? 'w-3/4' : 'w-full'}`}>
-          <div className="relative">
-            <TextEditor
-              value={content}
-              onChange={handleContentChange}
-              readOnly={!canEdit}
-              onCursorChange={(position) => {
-                if (socket && canEdit) {
-                  socket.emit('cursor-position', {
-                    documentId: id,
-                    position,
-                    userId: currentUser.id,
-                    username: currentUser.username,
-                  });
-                }
-              }}
-            />
-            {/* Cursor indicators */}
-            {Object.entries(cursorPositions).map(([userId, data]) => (
-              <div
-                key={userId}
-                className="absolute pointer-events-none"
-                style={{ left: `${data.position * 10}px`, top: '10px' }}
-              >
-                <div className="flex items-center">
-                  <div className="w-2 h-4 bg-blue-500"></div>
-                  <span className="ml-1 text-xs bg-blue-500 text-white px-1 rounded">
-                    {data.username}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
+          <TextEditor
+            value={content}
+            onChange={handleContentChange}
+            readOnly={!canEdit}
+          />
         </div>
         {showChat && (
           <div className="w-1/4 border-l">
