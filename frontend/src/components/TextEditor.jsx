@@ -1,146 +1,107 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useRef } from "react";
+import Quill from "quill";
+import "quill/dist/quill.snow.css";
+import QuillCursors from "quill-cursors";
+import { useSocket } from "../context/SocketContext";
 
-const TextEditor = ({ value, onChange, readOnly = false }) => {
-  const [internalValue, setInternalValue] = useState(value || '');
+Quill.register("modules/cursors", QuillCursors);
+
+const TextEditor = ({ docId, role = "Editor", initialDelta = null, onSaveComplete }) => {
   const editorRef = useRef(null);
-  const lastCursorPos = useRef(0);
+  const quillRef = useRef(null);
+  const saveTimeout = useRef(null);
+  const socket = useSocket();
+  const cursorsModuleRef = useRef(null);
 
+  // Init Quill once
   useEffect(() => {
-    if (value !== internalValue) {
-      setInternalValue(value || '');
-      
-      // Restore cursor position after update
-      if (editorRef.current) {
-        setTimeout(() => {
-          const selection = window.getSelection();
-          const range = document.createRange();
-          
-          // Try to restore cursor position
-          const textNode = editorRef.current.childNodes[0] || editorRef.current;
-          const maxPos = textNode.textContent ? textNode.textContent.length : 0;
-          const pos = Math.min(lastCursorPos.current, maxPos);
-          
-          range.setStart(textNode, pos);
-          range.setEnd(textNode, pos);
-          selection.removeAllRanges();
-          selection.addRange(range);
-        }, 0);
-      }
-    }
-  }, [value]);
+    if (!editorRef.current || quillRef.current) return;
 
-  const handleInput = (e) => {
-    const newValue = e.target.innerHTML;
-    setInternalValue(newValue);
-    
-    // Save cursor position
-    const selection = window.getSelection();
-    if (selection.rangeCount > 0) {
-      const range = selection.getRangeAt(0);
-      const preCaretRange = range.cloneRange();
-      preCaretRange.selectNodeContents(editorRef.current);
-      preCaretRange.setEnd(range.endContainer, range.endOffset);
-      lastCursorPos.current = preCaretRange.toString().length;
-    }
-    
-    if (onChange) {
-      onChange(newValue);
-    }
-  };
+    quillRef.current = new Quill(editorRef.current, {
+      theme: "snow",
+      readOnly: role === "Viewer",
+      modules: {
+        toolbar:
+          role === "Viewer"
+            ? false
+            : [
+                ["bold", "italic", "underline"],
+                [{ list: "ordered" }, { list: "bullet" }],
+                ["clean"]
+              ],
+        cursors: true,
+        clipboard: { matchVisual: false },
+      },
+    });
 
-  const applyFormat = (format) => {
-    // Save current selection
-    const selection = window.getSelection();
-    if (selection.rangeCount === 0) return;
-    
-    const range = selection.getRangeAt(0);
-    const selectedText = range.toString();
-    
-    if (selectedText) {
-      // Apply format to selected text
-      document.execCommand(format, false, null);
-    } else {
-      // Apply format at cursor position
-      document.execCommand(format, false, null);
-    }
-    
-    // Restore focus
-    editorRef.current.focus();
-    
-    // Trigger change event
-    const newValue = editorRef.current.innerHTML;
-    setInternalValue(newValue);
-    if (onChange) {
-      onChange(newValue);
-    }
-  };
+    cursorsModuleRef.current = quillRef.current.getModule("cursors");
 
-  const handlePaste = (e) => {
-    e.preventDefault();
-    
-    // Get plain text from clipboard
-    const text = e.clipboardData.getData('text/plain');
-    
-    // Insert text at cursor position
-    document.execCommand('insertText', false, text);
-    
-    // Trigger change event
-    const newValue = editorRef.current.innerHTML;
-    setInternalValue(newValue);
-    if (onChange) {
-      onChange(newValue);
-    }
-  };
+    // Paste plain text only
+    quillRef.current.root.addEventListener("paste", (e) => {
+      e.preventDefault();
+      const text = (e.clipboardData || window.clipboardData).getData("text/plain");
+      const sel = quillRef.current.getSelection(true);
+      quillRef.current.insertText(sel.index, text);
+      quillRef.current.setSelection(sel.index + text.length, 0);
+    });
 
-  return (
-    <div className="border rounded-lg overflow-hidden">
-      {!readOnly && (
-        <div className="bg-gray-100 p-2 border-b flex space-x-2">
-          <button
-            type="button"
-            onClick={() => applyFormat('bold')}
-            className="px-2 py-1 bg-white border rounded hover:bg-gray-200"
-            title="Bold"
-          >
-            <strong>B</strong>
-          </button>
-          <button
-            type="button"
-            onClick={() => applyFormat('italic')}
-            className="px-2 py-1 bg-white border rounded hover:bg-gray-200"
-            title="Italic"
-          >
-            <em>I</em>
-          </button>
-          <button
-            type="button"
-            onClick={() => applyFormat('underline')}
-            className="px-2 py-1 bg-white border rounded hover:bg-gray-200"
-            title="Underline"
-          >
-            <u>U</u>
-          </button>
-          <button
-            type="button"
-            onClick={() => applyFormat('insertUnorderedList')}
-            className="px-2 py-1 bg-white border rounded hover:bg-gray-200"
-            title="Bullet List"
-          >
-            • List
-          </button>
-        </div>
-      )}
-      <div
-        ref={editorRef}
-        contentEditable={!readOnly}
-        onInput={handleInput}
-        onPaste={handlePaste}
-        dangerouslySetInnerHTML={{ __html: internalValue }}
-        className="p-4 min-h-[300px] focus:outline-none focus:ring-1 focus:ring-blue-300"
-        style={{ whiteSpace: 'pre-wrap' }}
-      />
-    </div>
-  );
+    // Emit deltas and auto-save
+    quillRef.current.on("text-change", (delta, oldDelta, source) => {
+      if (source !== "user" || !socket) return;
+      socket.emit("doc-delta", { documentId: docId, delta });
+
+      if (saveTimeout.current) clearTimeout(saveTimeout.current);
+      saveTimeout.current = setTimeout(() => {
+        const contentDelta = quillRef.current.getContents();
+        socket.emit("save-doc", { documentId: docId, contentDelta });
+        if (onSaveComplete) onSaveComplete(contentDelta);
+      }, 1500);
+    });
+
+    // Cursor updates
+    quillRef.current.on("selection-change", (range, oldRange, source) => {
+      if (source !== "user" || !socket) return;
+      socket.emit("cursor-update", { documentId: docId, range });
+    });
+
+  }, [docId, role, socket, onSaveComplete]);
+
+  // Socket events
+  useEffect(() => {
+    if (!socket || !quillRef.current) return;
+
+    socket.emit("join-doc", { documentId: docId });
+
+    socket.on("document-state", ({ contentDelta }) => {
+      if (contentDelta) quillRef.current.setContents(contentDelta);
+    });
+
+    socket.on("doc-delta", ({ delta }) => {
+      if (delta) quillRef.current.updateContents(delta, "api");
+    });
+
+    socket.on("cursor-update", ({ userId, range }) => {
+      if (!cursorsModuleRef.current) return;
+      cursorsModuleRef.current.createCursor(userId, `User ${userId}`, 'blue');
+      if (range) cursorsModuleRef.current.moveCursor(userId, range);
+    });
+
+    return () => {
+      socket.off("document-state");
+      socket.off("doc-delta");
+      socket.off("cursor-update");
+      clearTimeout(saveTimeout.current);
+    };
+  }, [socket, docId]);
+
+  // Initial delta fallback
+  useEffect(() => {
+    if (initialDelta && quillRef.current) {
+      quillRef.current.setContents(initialDelta);
+    }
+  }, [initialDelta]);
+
+  return <div ref={editorRef} className="min-h-[300px] h-full bg-white" />;
 };
 
 export default TextEditor;
