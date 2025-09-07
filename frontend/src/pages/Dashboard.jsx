@@ -215,33 +215,56 @@ const Dashboard = () => {
                   : '';
 
             return (
-              <div key={doc._id} className="bg-white rounded-lg shadow-md p-6 flex flex-col justify-between">
-                <div>
-                  <h3 className="text-lg font-semibold mb-2">{doc.title}</h3>
-                  {docRole && (
-                    <p className="text-gray-500 text-sm mb-2">
-                      Your Role: <span className="font-medium">{docRole}</span>
-                    </p>
-                  )}
-                  <p className="text-gray-600 mb-4">{doc.content?.substring(0, 100) || 'No content yet'}...</p>
-                </div>
-                <div className="flex justify-between items-center mt-auto">
-                  <Link
-                    to={`/document/${doc._id}`}
-                    className="text-indigo-600 hover:text-indigo-800"
-                  >
-                    Open Document
-                  </Link>
-                  {isOwner && (
-                    <Link
-                      to={`/document/${doc._id}/settings`}
-                      className="text-gray-600 hover:text-gray-800"
-                    >
-                      Settings
-                    </Link>
-                  )}
-                </div>
-              </div>
+            // Inside your Document Cards map
+<div key={doc._id} className="bg-white rounded-lg shadow-md p-6 flex flex-col justify-between">
+  <div>
+    <h3 className="text-lg font-semibold mb-2">{doc.title}</h3>
+    {docRole && (
+      <p className="text-gray-500 text-sm mb-2">
+        Your Role: <span className="font-medium">{docRole}</span>
+      </p>
+    )}
+    <p className="text-gray-600 mb-4">{doc.content?.substring(0, 100) || 'No content yet'}...</p>
+  </div>
+ {/* Inside Document Cards map */}
+<div className="flex justify-between items-center mt-auto">
+  <Link
+    to={`/document/${doc._id}`}
+    className="text-indigo-600 hover:text-indigo-800"
+  >
+    Open Document
+  </Link>
+  <div className="flex gap-2">
+    {isOwner && (
+      <Link
+        to={`/document/${doc._id}/settings`}
+        className="text-gray-600 hover:text-gray-800"
+      >
+        Settings
+      </Link>
+    )}
+    {(isOwner || currentUser.role === 'admin') && (
+      <button
+        onClick={async () => {
+          if (!window.confirm('Are you sure you want to delete this document?')) return;
+          try {
+            await axios.delete(`/api/documents/${doc._id}`);
+            setDocuments(prev => prev.filter(d => d._id !== doc._id));
+          } catch (err) {
+            console.error('Failed to delete document:', err);
+            alert(err.response?.data?.message || 'Failed to delete document');
+          }
+        }}
+        className="bg-red-600 text-white px-2 py-1 rounded-md text-sm hover:bg-red-700"
+      >
+        Delete
+      </button>
+    )}
+  </div>
+</div>
+
+</div>
+
             );
           })}
         </div>

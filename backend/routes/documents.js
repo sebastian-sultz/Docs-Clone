@@ -182,18 +182,41 @@ router.delete('/:id/collaborators/:userId', authenticateToken, async (req, res) 
 //   }
 // });
 
+// router.delete('/:id', authenticateToken, async (req, res) => {
+//   try {
+//     const { isOwner, document } = await checkDocumentAccess(req.params.id, req.user._id);
+
+//     if (!isOwner && req.user.role !== 'admin') {
+//       return res.status(403).json({ message: 'Not authorized to delete this document' });
+//     }
+
+//     await Document.findByIdAndDelete(req.params.id);
+//     res.json({ message: 'Document deleted successfully' });
+//   } catch (error) {
+//     console.error('Error deleting document:', error);
+//     res.status(500).json({ message: 'Server error' });
+//   }
+// });
+
 router.delete('/:id', authenticateToken, async (req, res) => {
   try {
-    const { isOwner, document } = await checkDocumentAccess(req.params.id, req.user._id);
+    const doc = await Document.findById(req.params.id);
+    if (!doc) return res.status(404).json({ message: 'Document not found' });
 
-    if (!isOwner && req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Not authorized to delete this document' });
+    const userId = req.user.id;
+
+    // Allow delete if current user is document owner or admin
+    const isOwner = doc.owner.toString() === userId;
+    const isAdmin = req.user.role === 'admin';
+
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ message: 'Forbidden: Cannot delete this document' });
     }
 
-    await Document.findByIdAndDelete(req.params.id);
-    res.json({ message: 'Document deleted successfully' });
-  } catch (error) {
-    console.error('Error deleting document:', error);
+    await doc.deleteOne(); // Delete document
+    res.status(200).json({ message: 'Document deleted successfully' });
+  } catch (err) {
+    console.error('Delete document error:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
