@@ -4,10 +4,11 @@ const { authenticateToken, authorizeRoles } = require('../middleware/auth');
 const { QuillDeltaToHtmlConverter } = require('quill-delta-to-html');
 const { Document: DocxDocument, Packer, Paragraph, TextRun } = require('docx');
 const pdf = require('html-pdf');
+const { JSDOM } = require('jsdom');
 
 const router = express.Router();
 
-// Safe check document access
+// Function to safely check document access
 const checkDocumentAccess = async (documentId, userId) => {
   const document = await Document.findById(documentId)
     .populate('owner', 'id username')
@@ -15,9 +16,10 @@ const checkDocumentAccess = async (documentId, userId) => {
 
   if (!document) return { hasAccess: false, canEdit: false, document: null };
 
-  const ownerId = document.owner?._id?.toString();
-  const isOwner = ownerId === userId.toString();
-  const collaborator = document.collaborators?.find(c => c.user?._id?.toString() === userId.toString());
+  const isOwner = document.owner?._id?.toString() === userId.toString();
+  const collaborator = document.collaborators?.find(
+    c => c.user?._id?.toString() === userId.toString()
+  );
   const isEditor = collaborator?.role === 'editor';
   const isViewer = collaborator?.role === 'viewer';
   const isPublic = document.isPublic;
@@ -29,7 +31,7 @@ const checkDocumentAccess = async (documentId, userId) => {
   };
 };
 
-// GET all documents for user
+// Get all documents accessible to the user
 router.get('/', authenticateToken, async (req, res) => {
   try {
     const documents = await Document.find({
@@ -38,25 +40,21 @@ router.get('/', authenticateToken, async (req, res) => {
         { 'collaborators.user': req.user._id },
         { isPublic: true }
       ]
-    })
-      .populate('owner', 'username')
-      .populate('collaborators.user', 'username');
+    }).populate('owner', 'username').populate('collaborators.user', 'username');
 
-    // filter out documents with null owner
-    const validDocs = documents.filter(doc => doc.owner?._id);
-    res.json(validDocs);
+    res.json(documents || []);
   } catch (error) {
     console.error('Error fetching documents:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// GET single document
+// Get a single document
 router.get('/:id', authenticateToken, async (req, res) => {
   try {
     const { hasAccess, canEdit, document } = await checkDocumentAccess(req.params.id, req.user._id);
 
-    if (!hasAccess || !document) return res.status(404).json({ message: 'Document not found' });
+    if (!document || !hasAccess) return res.status(404).json({ message: 'Document not found' });
 
     res.json({
       ...document.toObject(),
@@ -70,24 +68,22 @@ router.get('/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// CREATE document
+// Create a new document
 router.post('/', authenticateToken, authorizeRoles('admin', 'editor'), async (req, res) => {
   try {
     const { title, content, contentDelta, isPublic } = req.body;
-
-    if (!title) return res.status(400).json({ message: 'Title required' });
 
     const document = new Document({
       title,
       content: content || '',
       contentDelta: contentDelta || { ops: [] },
       owner: req.user._id,
-      isPublic: !!isPublic,
-      collaborators: []
+      isPublic
     });
 
     await document.save();
     await document.populate('owner', 'username');
+
     res.status(201).json(document);
   } catch (error) {
     console.error('Error creating document:', error);
@@ -95,15 +91,14 @@ router.post('/', authenticateToken, authorizeRoles('admin', 'editor'), async (re
   }
 });
 
-// UPDATE document
+// Update document
 router.put('/:id', authenticateToken, async (req, res) => {
   try {
     const { content, contentDelta, title } = req.body;
     const { hasAccess, canEdit, document } = await checkDocumentAccess(req.params.id, req.user._id);
 
-    if (!hasAccess || !canEdit) return res.status(404).json({ message: 'Document not found or insufficient permissions' });
+    if (!document || !hasAccess || !canEdit) return res.status(404).json({ message: 'Document not found or insufficient permissions' });
 
-    // save version
     document.versions.push({
       delta: document.contentDelta || null,
       html: document.content || '',
@@ -133,7 +128,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Add / Update collaborator
+// Add collaborator
 router.post('/:id/collaborators', authenticateToken, async (req, res) => {
   try {
     const { userId, role } = req.body;
@@ -141,7 +136,7 @@ router.post('/:id/collaborators', authenticateToken, async (req, res) => {
 
     if (!document) return res.status(404).json({ message: 'Document not found or insufficient permissions' });
 
-    const existingCollaborator = document.collaborators.find(c => c.user.toString() === userId);
+    const existingCollaborator = document.collaborators?.find(c => c.user?.toString() === userId);
     if (existingCollaborator) existingCollaborator.role = role;
     else document.collaborators.push({ user: userId, role });
 
@@ -159,7 +154,7 @@ router.delete('/:id/collaborators/:userId', authenticateToken, async (req, res) 
     const document = await Document.findOne({ _id: req.params.id, owner: req.user._id });
     if (!document) return res.status(404).json({ message: 'Document not found or insufficient permissions' });
 
-    document.collaborators = document.collaborators.filter(c => c.user.toString() !== req.params.userId);
+    document.collaborators = document.collaborators?.filter(c => c.user?.toString() !== req.params.userId);
     await document.save();
     res.json(document);
   } catch (error) {
@@ -168,36 +163,7 @@ router.delete('/:id/collaborators/:userId', authenticateToken, async (req, res) 
   }
 });
 
-// DELETE document
-// router.delete('/:id', authenticateToken, async (req, res) => {
-//   try {
-//     const document = await Document.findOne({ _id: req.params.id, owner: req.user._id });
-//     if (!document) return res.status(404).json({ message: 'Document not found or insufficient permissions' });
-
-//     await Document.findByIdAndDelete(req.params.id);
-//     res.json({ message: 'Document deleted successfully' });
-//   } catch (error) {
-//     console.error('Error deleting document:', error);
-//     res.status(500).json({ message: 'Server error' });
-//   }
-// });
-
-// router.delete('/:id', authenticateToken, async (req, res) => {
-//   try {
-//     const { isOwner, document } = await checkDocumentAccess(req.params.id, req.user._id);
-
-//     if (!isOwner && req.user.role !== 'admin') {
-//       return res.status(403).json({ message: 'Not authorized to delete this document' });
-//     }
-
-//     await Document.findByIdAndDelete(req.params.id);
-//     res.json({ message: 'Document deleted successfully' });
-//   } catch (error) {
-//     console.error('Error deleting document:', error);
-//     res.status(500).json({ message: 'Server error' });
-//   }
-// });
-
+// Delete document (Owner or Admin)
 router.delete('/:id', authenticateToken, async (req, res) => {
   try {
     const doc = await Document.findById(req.params.id);
@@ -217,6 +183,61 @@ router.delete('/:id', authenticateToken, async (req, res) => {
     res.status(200).json({ message: 'Document deleted successfully' });
   } catch (err) {
     console.error('Delete document error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Export document as PDF or Word
+router.get('/:id/export', authenticateToken, async (req, res) => {
+  try {
+    const { format } = req.query;
+    const { hasAccess, document } = await checkDocumentAccess(req.params.id, req.user._id);
+
+    if (!document || !hasAccess) return res.status(404).json({ message: 'Document not found' });
+
+    const html = document.content || '';
+
+    if (format === 'pdf') {
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${document.title}.pdf"`);
+      pdf.create(html).toStream((err, stream) => {
+        if (err) return res.status(500).send('PDF generation error');
+        stream.pipe(res);
+      });
+    } else if (format === 'word') {
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+      res.setHeader('Content-Disposition', `attachment; filename="${document.title}.docx"`);
+
+      // Convert HTML to basic Word paragraphs preserving bold/italic/underline
+      const dom = new JSDOM(html);
+      const paragraphs = Array.from(dom.window.document.body.children).map(node => {
+        const runs = [];
+
+        node.childNodes.forEach(n => {
+          if (n.nodeType === 3) runs.push(new TextRun({ text: n.textContent }));
+          else if (n.nodeType === 1) {
+            const style = {};
+            if (n.tagName === 'B' || n.tagName === 'STRONG') style.bold = true;
+            if (n.tagName === 'I' || n.tagName === 'EM') style.italics = true;
+            if (n.tagName === 'U') style.underline = {};
+            runs.push(new TextRun({ text: n.textContent, ...style }));
+          }
+        });
+
+        return new Paragraph({ children: runs.length ? runs : [new TextRun({ text: node.textContent })] });
+      });
+
+      const doc = new DocxDocument({
+        sections: [{ children: paragraphs.length ? paragraphs : [new Paragraph('')] }]
+      });
+
+      const buffer = await Packer.toBuffer(doc);
+      res.send(buffer);
+    } else {
+      res.status(400).json({ message: 'Unsupported format' });
+    }
+  } catch (error) {
+    console.error('Error exporting document:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
