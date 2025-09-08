@@ -71,8 +71,8 @@ collab-docs/
 
 ### 1️⃣ Clone the repository  
 ```bash
-git clone https://github.com/your-username/collab-docs.git
-cd collab-docs
+git clone https://github.com/sebastian-sultz/Docs-Clone.git
+cd Docs-Clone
 ````
 
 ---
