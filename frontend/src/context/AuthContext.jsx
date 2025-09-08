@@ -12,7 +12,7 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   // Set base URL for API requests
-  axios.defaults.baseURL = 'http://localhost:5000';
+  axios.defaults.baseURL = 'https://docs-clone-liart.vercel.app';
 
   useEffect(() => {
     const token = localStorage.getItem('token');
